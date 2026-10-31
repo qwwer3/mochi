@@ -173,4 +173,159 @@
       const targetSpan = Array.from(candBar.children).find(span => span.textContent === targetWord);
       if (targetSpan) {
         targetSpan.style.background = '#d0d0d0';
-        t
+        targetSpan.style.color = '#000';
+      }
+      currentText += targetWord;
+      updateInputBox();
+      currentPinyin = "";
+      targetWord = "";
+      refreshCandidates(true);
+      step1();
+    }, 5000);
+  }
+
+  // ==========================================
+  // 候选词逻辑
+  // ==========================================
+  function refreshCandidates(reset) {
+    if (reset) {
+      shownWords = [];
+      candidatesPool = [];
+      if (currentPinyin) {
+        let regexStr = "^";
+        for (let char of currentPinyin) {
+          regexStr += "[" + (window.T9_MAP[char] || char) + "]";
+        }
+        const reg = new RegExp(regexStr);
+        for (let py in window.PY_DICT) {
+          if (reg.test(py)) {
+            candidatesPool = candidatesPool.concat(window.PY_DICT[py]);
+          }
+        }
+        candidatesPool = [...new Set(candidatesPool)];
+      }
+    }
+    
+    // 取接下来的6个不重复的词
+    const nextWords = [];
+    for (let i = 0; i < candidatesPool.length; i++) {
+      const w = candidatesPool[i];
+      if (!shownWords.includes(w)) {
+        nextWords.push(w);
+        if (nextWords.length === 6) break;
+      }
+    }
+
+    if (nextWords.length === 0) return false; // 没有词了
+
+    currentCandidates = nextWords;
+    shownWords = shownWords.concat(nextWords);
+    
+    pyBar.textContent = currentPinyin;
+    candBar.innerHTML = '';
+    
+    nextWords.forEach(word => {
+      const span = document.createElement('span');
+      span.textContent = word;
+      span.style.background = 'transparent';
+      span.style.color = '#333';
+      span.style.transition = 'background 0.2s';
+      candBar.appendChild(span);
+    });
+
+    // 随机指定一个目标词（动作四会用到）
+    targetWord = currentCandidates[Math.floor(Math.random() * currentCandidates.length)];
+    return true;
+  }
+
+  function slideRight() {
+    // 把已展示的清除，重新拿新的
+    const oldWord = targetWord;
+    const hasMore = refreshCandidates(false);
+    if (hasMore) return true;
+    return false;
+  }
+
+  function updateInputBox() { inputBox.textContent = currentText; }
+
+  function doSend() {
+    if (currentPinyin && currentCandidates.length > 0) currentText += currentCandidates[0];
+    if (currentText.trim()) {
+      if (window.chatAddIn) window.chatAddIn(currentText, { isOut: true, isPinyinKb: true });
+    }
+    currentText = "";
+    currentPinyin = "";
+    refreshCandidates(true);
+    updateInputBox();
+  }
+
+  // ==========================================
+  // 任务队列控制
+  // ==========================================
+  function pushTask(task) {
+    if (!isFeatureOn) return;
+    taskQueue.push(task);
+    processQueue();
+  }
+
+  function processQueue() {
+    if (isTypingTask || taskQueue.length === 0) return; // 正在跑或者没任务
+    
+    isTypingTask = true;
+    const task = taskQueue.shift();
+
+    if (task.type === 'media') {
+      // 图片或表情包直接瞬间发送
+      if (window.originalChatAddIn) window.originalChatAddIn(task.text, task.opts);
+      setTimeout(() => {
+        isTypingTask = false;
+        processQueue();
+      }, 1000); // 隔1秒发下一个
+    } else if (task.type === 'text') {
+      // 文字任务，弹出键盘打字
+      panel.hidden = false;
+      startTyping();
+    }
+  }
+
+  function finishTask() {
+    clearTimeout(autoTimer);
+    clearTimeout(tenMinTimer);
+    isTypingTask = false;
+    panel.hidden = true;
+    // 稍作停顿后执行下一个任务
+    setTimeout(processQueue, 800);
+  }
+
+  // ==========================================
+  // 拦截器 (Hook)
+  // ==========================================
+  window.originalChatAddIn = window.chatAddIn;
+  window.chatAddIn = function(text, opts) {
+    // 如果拼音键盘发出的，放行
+    if (opts && opts.isPinyinKb) return window.originalChatAddIn.apply(this, arguments);
+    
+    // 如果总开关没开，放行
+    if (!isFeatureOn) return window.originalChatAddIn.apply(this, arguments);
+
+    // 判断系统动作/多媒体
+    const isUser = opts && opts.isOut === true;
+    const isSystem = opts && (opts.special || opts.system || opts.isSystem);
+    const isMedia = opts && (opts.img || opts.type === 'voice' || opts.type === 'image' || opts.type === 'sticker');
+
+    // 如果正在打字（防冲突）或者已经是用户发的，或者系统动作，直接放行
+    if (isTypingTask || isUser || isSystem) {
+      return window.originalChatAddIn.apply(this, arguments);
+    }
+
+    // 走到这里，说明是原系统的"字卡文字"或"多媒体"，我们拦截它并入队
+    if (isMedia) {
+      pushTask({ type: 'media', text: text, opts: opts });
+    } else {
+      pushTask({ type: 'text', text: text, opts: opts });
+    }
+
+    return null; // 拦截原文字，交给队列
+  };
+
+})();
