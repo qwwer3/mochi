@@ -5209,6 +5209,14 @@ if (!f) return false;
 return !PENDING_CARD_SETTLED[rec[f]];
 }
 function addRec(rec) {
+      // ====== 拟真拼音键盘接管钩子 ======
+    if (rec.side === 'in' && !rec.special && window.isPinyinKbEnabled) {
+        if (window.pinyinKbQueuePush) {
+            window.pinyinKbQueuePush(rec, addRec); 
+            return null; 
+        }
+    }
+    // ==================================
 if (rec.side === 'in' && nightBlocksIn(rec.initiative, rec.nightAllow)) return null;
 if (rateBlocksIn(rec)) return null; // #1180 总量限流兜底（chatAddGift 等不过 addIn 的入口也走这里）
 if (!rec.ts) rec.ts = Date.now();
