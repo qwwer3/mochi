@@ -252,7 +252,7 @@ function processQueue() {
         refreshCandidates(true);
       }
       Math.random() < 0.5 ? step2() : step1();
-    }, 5000);
+    }, 8000);
   }
 
   // ===== 动作二 =====
@@ -261,7 +261,7 @@ function processQueue() {
     clearTimeout(autoTimer);
     autoTimer = setTimeout(function () {
       Math.random() < 0.7 ? step4() : step3();
-    }, 4000);
+    }, 6000);
   }
 
   // ===== 动作三 =====
@@ -271,7 +271,7 @@ function processQueue() {
     autoTimer = setTimeout(function () {
       if (Math.random() < 0.7) step4();
       else { slideRight() ? step3() : step4(); }
-    }, 4000);
+    }, 5000);
   }
 
   // ===== 动作四 =====
@@ -298,7 +298,7 @@ function processQueue() {
       shownWords = []; candidatesPool = []; currentCandidates = [];
       refreshCandidates(true);
       step1();
-    }, 5000);
+    }, 8000);
   }
 
   // ===== 候选刷新（A1 已修：匹配失败保留旧池） =====
