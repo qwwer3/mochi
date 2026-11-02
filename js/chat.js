@@ -5377,8 +5377,8 @@ return addRec({ side: 'out', text: text });
 window.chatAddInPinyin = function (text) {
   var s = String(text == null ? '' : text).trim();
   if (!s) return null;
-  return addRec({ side: 'in', text: s });
-};      
+  return addRec({ side: 'in', text: s, pinyinBypass: true });
+};    
 function refreshNickNodesInPlace() {
 try {
 const idxs = [];
