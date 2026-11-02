@@ -345,15 +345,44 @@
   function slideRight() { return refreshCandidates(false); }
   function updateInputBox() { if (inputBox) inputBox.textContent = currentText; }
 
-  function doSend() {
-    if (currentPinyin && currentCandidates.length > 0) currentText += currentCandidates[0];
-    if (currentText.trim()) {
-      if (window.chatAddIn) {
-        try { window.chatAddIn(currentText, { isOut: true, isPinyinKb: true, silent: true }); }
-        catch (e) { console.error("拼音打字·发送失败", e); }
+function doSend() {
+  let text = (currentText || '').trim();
+  if (!text && currentPinyin && currentCandidates && currentCandidates.length > 0) {
+    text = currentCandidates[0].trim();
+  }
+  if (!text) {
+    resetTypingState();
+    return;
+  }
+
+  try {
+    // 优先走真正的发送入口，避免绕过默认输入与发送状态
+    if (window.chatSendMsg) {
+      window.chatSendMsg(text);
+    } else if (window.chatAddIn) {
+      window.chatAddIn(text, { isOut: true, isPinyinKb: true, silent: false });
+    } else {
+      const input = document.getElementById('chat-input')
+        || document.querySelector('#page-chat textarea')
+        || document.querySelector('#page-chat input');
+
+      if (input) {
+        input.value = text;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       }
     }
-    resetTypingState();
+  } catch (e) {
+    console.error('拼音打字·真实发送失败', e);
+    try {
+      if (window.chatAddIn) {
+        window.chatAddIn(text, { isOut: true, isPinyinKb: true, silent: false });
+      }
+    } catch (e2) {}
   }
+
+  resetTypingState();
+  if (panel) panel.hidden = true;
+}
 
 })();
