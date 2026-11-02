@@ -5370,6 +5370,14 @@ function addOut(text) {
 nightOpenReply();
 return addRec({ side: 'out', text: text });
 }
+      
+// 拼音打字专用：以「对方」身份落一条纯文本消息
+// 不带打字动画、不调 nightOpenReply（对方发消息不该触发「我」的自动回复）
+window.chatAddInPinyin = function (text) {
+  var s = String(text == null ? '' : text).trim();
+  if (!s) return null;
+  return addRec({ side: 'in', text: s });
+};      
 function refreshNickNodesInPlace() {
 try {
 const idxs = [];
