@@ -2431,9 +2431,41 @@ m.hidden = true;
 m.style.display = 'none';
 if (nav === false) return;
 try {
-document.querySelectorAll('.page').forEach(pg => { if (!pg.hidden) pg.hidden = true; });
-const pg = document.getElementById(ioPrevPage);
-if (pg) pg.hidden = false;
+function csDrawerClose() {
+  clearInterval(csDrawerWatchTimer); csDrawerWatchTimer = 0;
+  try { csDemoBubbles(false); } catch (e) {}
+
+  try {
+    const d = document.getElementById('chat-beauty-drawer');
+    if (d) d.style.display = 'none';
+
+    // 不要一次性隐藏所有 page，容易把页面整个空掉
+    const targetPage = document.getElementById('page-setting');
+    if (targetPage) {
+      document.querySelectorAll('.page').forEach(function (pg) {
+        pg.hidden = (pg !== targetPage);
+      });
+    } else {
+      document.querySelectorAll('.page').forEach(function (pg) {
+        if (pg.id === 'page-chat-settings') {
+          pg.hidden = false;
+        } else {
+          pg.hidden = true;
+        }
+      });
+    }
+
+    document.querySelectorAll('.tab').forEach(function (t) {
+      t.classList.toggle('active', t.getAttribute('data-page') === 'page-setting');
+    });
+
+    const tabs = document.getElementById('cs-tabs');
+    if (tabs) {
+      const b = tabs.querySelector('.them-tab[data-tab="beautify"]');
+      if (b) b.click();
+    }
+  } catch (e) {}
+}
 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
 const st = document.querySelector('.tab[data-page="' + ioPrevPage + '"]');
 if (st) st.classList.add('active');
