@@ -1,296 +1,359 @@
-(function(){
+(function () {
   const panel = document.getElementById('pinyin-kb-panel');
   const btn = document.getElementById('more-pinyinkb');
   if (!btn || !panel) return;
 
-  const keyEls = document.querySelectorAll('.kb-key');
+  function getKeyEls() { return document.querySelectorAll('.kb-key'); }
   const pyBar = document.getElementById('kb-pinyin-bar');
   const candBar = document.getElementById('kb-candidates');
   const inputBox = document.getElementById('kb-input-box');
 
-  let isFeatureOn = false; 
-  window.isPinyinKbEnabled = false; 
-  
-  let isTypingTask = false; 
-  let collectWindow = null; 
-  let collectingQueue = []; 
-  
-  let currentPinyin = ""; 
-  let currentText = "";   
-  let candidatesPool = []; 
-  let shownWords = [];     
-  let currentCandidates = []; 
-  
-  let autoTimer = null;
-  let tenMinTimer = null;
-  let targetWord = ""; 
-  let taskQueue = []; 
+  let isFeatureOn = false;
+  window.isPinyinKbEnabled = false;
 
-  // ==========================================
-  // 拖拽逻辑 (带边界限制)
-  // ==========================================
+  let isTypingTask = false;
+  let collectWindow = null;
+  let collectingQueue = [];
+  let currentPinyin = "", currentText = "";
+  let candidatesPool = [], shownWords = [], currentCandidates = [], targetWord = "";
+  let autoTimer = null, tenMinTimer = null, taskQueue = [];
+
+  // ===== 开关持久化 =====
+  const STORE_KEY = 'xy-home-v2:pinyin-kb-on';
+  try {
+    if (localStorage.getItem(STORE_KEY) === '1') {
+      isFeatureOn = true; window.isPinyinKbEnabled = true;
+      if (btn.classList) btn.classList.add('on');
+    }
+  } catch (e) {}
+
+  // ===== 拖拽（判空保护） =====
   let isDragging = false, startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
-  const dragHandle = document.getElementById('kb-input-box').parentElement;
-
-  dragHandle.addEventListener('pointerdown', (e) => {
-    if (e.target.tagName === 'BUTTON') return;
-    isDragging = true;
-    startX = e.clientX; startY = e.clientY;
-    const rect = panel.getBoundingClientRect();
-    initialLeft = rect.left; initialTop = rect.top;
-    panel.style.bottom = 'auto'; panel.style.right = 'auto';
-    panel.style.left = initialLeft + 'px'; panel.style.top = initialTop + 'px';
-  });
-
-  window.addEventListener('pointermove', (e) => {
+  const dragHandle = inputBox && inputBox.parentElement;
+  if (dragHandle) {
+    dragHandle.addEventListener('pointerdown', function (e) {
+      if (e.target.tagName === 'BUTTON') return;
+      isDragging = true;
+      startX = e.clientX; startY = e.clientY;
+      const rect = panel.getBoundingClientRect();
+      initialLeft = rect.left; initialTop = rect.top;
+      panel.style.bottom = 'auto'; panel.style.right = 'auto';
+      panel.style.left = initialLeft + 'px'; panel.style.top = initialTop + 'px';
+    });
+  }
+  window.addEventListener('pointermove', function (e) {
     if (!isDragging) return;
-    let newLeft = initialLeft + e.clientX - startX;
-    let newTop = initialTop + e.clientY - startY;
-    newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - panel.offsetWidth));
-    newTop = Math.max(0, Math.min(newTop, window.innerHeight - panel.offsetHeight));
-    panel.style.left = newLeft + 'px';
-    panel.style.top = newTop + 'px';
+    let L = initialLeft + e.clientX - startX, T = initialTop + e.clientY - startY;
+    L = Math.max(0, Math.min(L, window.innerWidth - panel.offsetWidth));
+    T = Math.max(0, Math.min(T, window.innerHeight - panel.offsetHeight));
+    panel.style.left = L + 'px'; panel.style.top = T + 'px';
   });
+  window.addEventListener('pointerup', function () { isDragging = false; });
 
-  window.addEventListener('pointerup', () => { isDragging = false; });
-
-  // ==========================================
-  // 总开关
-  // ==========================================
-  btn.addEventListener('click', () => {
+  // ===== 开关 =====
+  btn.addEventListener('click', function () {
     isFeatureOn = !isFeatureOn;
-    window.isPinyinKbEnabled = isFeatureOn; 
+    window.isPinyinKbEnabled = isFeatureOn;
+    if (btn.classList) { isFeatureOn ? btn.classList.add('on') : btn.classList.remove('on'); }
+    try {
+      isFeatureOn ? localStorage.setItem(STORE_KEY, '1') : localStorage.removeItem(STORE_KEY);
+    } catch (e) {}
     if (isFeatureOn) {
       if (window.toast) window.toast('拟真拼音打字已开启');
+      // 重新开启时补处理残留队列
+      if (taskQueue.length > 0) setTimeout(processQueue, 100);
     } else {
       if (window.toast) window.toast('拟真拼音打字已关闭');
       forceStop();
     }
   });
 
+  // ===== 状态重置 =====
+  function resetTypingState() {
+    currentPinyin = ""; currentText = "";
+    candidatesPool = []; shownWords = []; currentCandidates = []; targetWord = "";
+    if (pyBar) pyBar.textContent = "";
+    if (candBar) candBar.innerHTML = "";
+    if (inputBox) inputBox.textContent = "";
+  }
+
   function forceStop() {
     isTypingTask = false;
     clearTimeout(autoTimer); clearTimeout(tenMinTimer); clearTimeout(collectWindow);
     collectWindow = null; collectingQueue = []; taskQueue = [];
     panel.hidden = true;
-    currentPinyin = ""; currentText = "";
-    updateCandidates(); updateInputBox();
+    resetTypingState();
   }
 
-  // ==========================================
-  // 核心钩子：由 chat.js 调用
-  // ==========================================
-  window.pinyinKbQueuePush = function(rec, addRecFn) {
-    if (!isFeatureOn) return;
-    if (isTypingTask) return; // 并发丢弃
-    
-    if (collectWindow) {
-      collectingQueue.push({ rec, addRecFn });
-      return;
+  // ===== 媒体消息识别（依据 chat.js 的 rec 结构） =====
+  function isMediaRec(rec) {
+    if (!rec) return false;
+    if (rec.img || rec.voice) return true;
+    const t = String(rec.type || '').toLowerCase();
+    if (t && t !== 'text') return true;
+    if (Array.isArray(rec.parts)) {
+      for (let i = 0; i < rec.parts.length; i++) {
+        const p = rec.parts[i];
+        if (!p) continue;
+        const pt = String(p.t || p.type || '').toLowerCase();
+        if (pt && pt !== 'text') return true;
+      }
     }
-    
-    collectingQueue = [{ rec, addRecFn }];
-    collectWindow = setTimeout(() => {
+    return false;
+  }
+
+  // ===== 入队 =====
+  window.pinyinKbQueuePush = function (rec, addRecFn) {
+    if (!isFeatureOn) return;
+    if (isTypingTask) return;
+    if (collectWindow) { collectingQueue.push({ rec: rec, addRecFn: addRecFn }); return; }
+    collectingQueue = [{ rec: rec, addRecFn: addRecFn }];
+    collectWindow = setTimeout(function () {
       collectWindow = null;
-      collectingQueue.forEach(item => {
-        if (item.rec.img || item.rec.voice) {
-          taskQueue.push({ type: 'media', rec: item.rec, addRecFn: item.addRecFn });
-        } else {
-          taskQueue.push({ type: 'text', rec: item.rec, addRecFn: item.addRecFn });
-        }
+      if (!isFeatureOn) { collectingQueue = []; return; }
+      collectingQueue.forEach(function (item) {
+        taskQueue.push({
+          type: isMediaRec(item.rec) ? 'media' : 'text',
+          rec: item.rec, addRecFn: item.addRecFn
+        });
       });
       collectingQueue = [];
       if (taskQueue.length > 0) processQueue();
-    }, 800); 
+    }, 800);
   };
 
-  // ==========================================
-  // 状态机与队列
-  // ==========================================
   function processQueue() {
+    if (!isFeatureOn) return;
     if (isTypingTask || taskQueue.length === 0) return;
     isTypingTask = true;
     const task = taskQueue.shift();
-
     if (task.type === 'media') {
-      // 遇到图片/表情包：瞬间发出去，不弹键盘
-      if (task.addRecFn) task.addRecFn(task.rec); 
-      setTimeout(() => { isTypingTask = false; processQueue(); }, 1000); 
+      if (task.addRecFn) {
+        try { task.addRecFn(task.rec); } catch (e) { console.error('拼音打字·媒体消息失败', e); }
+      }
+      setTimeout(function () { isTypingTask = false; processQueue(); }, 1000);
     } else {
-      // 遇到文字：弹出键盘开始打字
       panel.hidden = false;
-      startTyping();
+      try { startTyping(); }
+      catch (e) {
+        console.error('拼音打字·startTyping异常', e);
+        isTypingTask = false; panel.hidden = true;
+        setTimeout(processQueue, 1000);
+      }
     }
   }
 
   function finishTask() {
     clearTimeout(autoTimer); clearTimeout(tenMinTimer);
     isTypingTask = false; panel.hidden = true;
-    setTimeout(processQueue, 1000); // 打完一条，停顿一秒执行队列下一条
+    resetTypingState();
+    setTimeout(function () { if (isFeatureOn) processQueue(); }, 1000);
   }
 
   function startTyping() {
-    resetTenMinTimer(); step1();
+    resetTypingState();
+    resetTenMinTimer();
+    step1();
   }
 
   function resetTenMinTimer() {
     clearTimeout(tenMinTimer);
-    tenMinTimer = setTimeout(() => {
+    tenMinTimer = setTimeout(function () {
       if (!isTypingTask) return;
       doSend(); finishTask();
     }, 10 * 60 * 1000);
   }
 
   function pressKeyVisual(key) {
-    const el = Array.from(keyEls).find(el => el.getAttribute('data-key') === String(key));
-    if (el) {
+    const els = getKeyEls();
+    const el = Array.prototype.find.call(els, function (n) { return n.getAttribute('data-key') === String(key); });
+    if (el && el.classList) {
       el.classList.add('active');
-      setTimeout(() => el.classList.remove('active'), 150);
+      setTimeout(function () { if (el.classList) el.classList.remove('active'); }, 150);
     }
   }
 
-  // 【动作一】
+  // ===== 纯函数：按前缀匹配候选池 =====
+  function matchPool(prefix) {
+    if (!prefix) return [];
+    const dict = window.PY_DICT || {};
+    const pool = [];
+    let regexStr = "^";
+    for (let i = 0; i < prefix.length; i++) {
+      const ch = prefix.charAt(i);
+      regexStr += "[" + ((window.T9_MAP && window.T9_MAP[ch]) || ch) + "]";
+    }
+    let reg = null;
+    try { reg = new RegExp(regexStr); } catch (e) { return []; }
+    for (const py in dict) {
+      if (!Object.prototype.hasOwnProperty.call(dict, py)) continue;
+      if (reg.test(py)) {
+        const words = dict[py];
+        if (Array.isArray(words)) {
+          for (let j = 0; j < words.length; j++) {
+            if (pool.indexOf(words[j]) < 0) pool.push(words[j]);
+          }
+        }
+      }
+    }
+    return pool;
+  }
+
+  // ===== 动作一 =====
   function step1() {
     if (!isTypingTask) return;
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(() => {
-      const keys = ['2','3','4','5','6','7','8','9', 'backspace', 'send'];
-      const pick = keys[Math.floor(Math.random() * keys.length)];
-      pressKeyVisual(pick);
-
-      if (pick === 'send') {
-        doSend(); finishTask();
-      } else if (pick === 'backspace') {
-        if (currentPinyin.length > 0) {
-          currentPinyin = currentPinyin.slice(0, -1); refreshCandidates(true);
-        } else if (currentText.length > 0) {
-          currentText = currentText.slice(0, -1); updateInputBox();
-        }
-        step1();
-      } else {
-        const letters = window.T9_MAP[pick];
-        const randomLetter = letters[Math.floor(Math.random() * letters.length)];
-        
-        if (currentPinyin.length >= 5) {
-          currentPinyin = currentPinyin.slice(0, -1);
+    autoTimer = setTimeout(function () {
+      if (currentPinyin.length >= 8) {
+        if (currentCandidates && currentCandidates.length > 0) {
+          Math.random() < 0.5 ? step2() : step3();
         } else {
-          currentPinyin += randomLetter;
-        }
-
-        let hasWord = refreshCandidates(true);
-        
-        if (!hasWord) {
-          currentPinyin = currentPinyin.slice(0, -1);
+          currentPinyin = "";
           refreshCandidates(true);
           step1();
-        } else {
-          if (Math.random() < 0.5) step2();
-          else step1();
+        }
+        return;
+      }
+      const keys = ['2','3','4','5','6','7','8','9','backspace','send'];
+      const pick = keys[Math.floor(Math.random() * keys.length)];
+      pressKeyVisual(pick);
+      if (pick === 'send') { doSend(); finishTask(); return; }
+      if (pick === 'backspace') {
+        if (currentPinyin.length > 0) {
+          currentPinyin = currentPinyin.slice(0, -1);
+          refreshCandidates(true);
+        } else if (currentText.length > 0) {
+          currentText = currentText.slice(0, -1);
+          updateInputBox();
+        }
+        step1();
+        return;
+      }
+      const letters = window.T9_MAP && window.T9_MAP[pick];
+      if (!letters) { step1(); return; }
+      const chosen = letters.charAt(Math.floor(Math.random() * letters.length));
+      currentPinyin += chosen;
+      refreshCandidates(true);
+      // 拼音过长且完全无匹配 → 限次收缩，避免完整词典下卡顿
+      if (currentPinyin.length > 6 && matchPool(currentPinyin).length === 0) {
+        let tries = 0;
+        while (currentPinyin.length > 2 && tries < 3) {
+          currentPinyin = currentPinyin.slice(0, -1);
+          if (matchPool(currentPinyin).length > 0) {
+            refreshCandidates(true);
+            break;
+          }
+          tries++;
         }
       }
+      Math.random() < 0.5 ? step2() : step1();
     }, 5000);
   }
 
-  // 【动作二】
+  // ===== 动作二 =====
   function step2() {
     if (!isTypingTask) return;
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(() => {
-      if (Math.random() < 0.7) step4();
-      else step3();
+    autoTimer = setTimeout(function () {
+      Math.random() < 0.7 ? step4() : step3();
     }, 4000);
   }
 
-  // 【动作三】
+  // ===== 动作三 =====
   function step3() {
     if (!isTypingTask) return;
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(() => {
+    autoTimer = setTimeout(function () {
       if (Math.random() < 0.7) step4();
-      else {
-        if (!slideRight()) step4(); 
-        else step3();
-      }
+      else { slideRight() ? step3() : step4(); }
     }, 4000);
   }
 
-  // 【动作四】
+  // ===== 动作四 =====
   function step4() {
     if (!isTypingTask) return;
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(() => {
-      const targetSpan = Array.from(candBar.children).find(span => span.textContent === targetWord);
+    autoTimer = setTimeout(function () {
+      if (!currentCandidates || currentCandidates.length === 0 || !targetWord) {
+        currentPinyin = "";
+        refreshCandidates(true);
+        step1();
+        return;
+      }
+      const targetSpan = candBar ? Array.prototype.find.call(candBar.children || [], function (span) {
+        return span.textContent === targetWord;
+      }) : null;
       if (targetSpan) {
-        targetSpan.style.background = '#d0d0d0';
-        targetSpan.style.color = '#000';
+        targetSpan.style.background = "#d0d0d0";
+        targetSpan.style.color = "#000";
       }
       currentText += targetWord;
       updateInputBox();
-      currentPinyin = "";
-      targetWord = "";
+      currentPinyin = ""; targetWord = "";
+      shownWords = []; candidatesPool = []; currentCandidates = [];
       refreshCandidates(true);
       step1();
     }, 5000);
   }
 
+  // ===== 候选刷新（A1 已修：匹配失败保留旧池） =====
   function refreshCandidates(reset) {
     if (reset) {
-      shownWords = []; candidatesPool = [];
-      if (currentPinyin) {
-        let regexStr = "^";
-        for (let char of currentPinyin) {
-          regexStr += "[" + (window.T9_MAP[char] || char) + "]";
-        }
-        const reg = new RegExp(regexStr);
-        for (let py in window.PY_DICT) {
-          if (reg.test(py)) {
-            candidatesPool = candidatesPool.concat(window.PY_DICT[py]);
-          }
-        }
-        candidatesPool = [...new Set(candidatesPool)];
+      if (pyBar) pyBar.textContent = currentPinyin;
+      if (!currentPinyin) {
+        candidatesPool = []; shownWords = []; currentCandidates = []; targetWord = "";
+        if (candBar) candBar.innerHTML = "";
+        return false;
       }
+      const newPool = matchPool(currentPinyin);
+      if (newPool.length > 0) {
+        candidatesPool = newPool;
+        shownWords = [];
+      }
+      // 匹配失败：保留旧池
     }
-    
     const nextWords = [];
     for (let i = 0; i < candidatesPool.length; i++) {
       const w = candidatesPool[i];
-      if (!shownWords.includes(w)) {
+      if (shownWords.indexOf(w) < 0) {
         nextWords.push(w);
         if (nextWords.length === 6) break;
       }
     }
-
-    if (nextWords.length === 0) return false;
-
+    if (nextWords.length === 0) {
+      if (candBar) candBar.innerHTML = "";
+      currentCandidates = []; targetWord = "";
+      return false;
+    }
     currentCandidates = nextWords;
     shownWords = shownWords.concat(nextWords);
-    
-    pyBar.textContent = currentPinyin;
-    candBar.innerHTML = '';
-    
-    nextWords.forEach(word => {
-      const span = document.createElement('span');
-      span.textContent = word;
-      span.style.background = 'transparent';
-      span.style.color = '#333';
-      span.style.transition = 'background 0.2s';
-      candBar.appendChild(span);
-    });
-
+    if (candBar) {
+      candBar.innerHTML = "";
+      nextWords.forEach(function (word) {
+        const span = document.createElement("span");
+        span.textContent = word;
+        span.style.background = "transparent";
+        span.style.color = "#333";
+        span.style.transition = "background 0.2s";
+        candBar.appendChild(span);
+      });
+    }
     targetWord = currentCandidates[Math.floor(Math.random() * currentCandidates.length)];
     return true;
   }
 
   function slideRight() { return refreshCandidates(false); }
-  function updateInputBox() { inputBox.textContent = currentText; }
+  function updateInputBox() { if (inputBox) inputBox.textContent = currentText; }
 
   function doSend() {
     if (currentPinyin && currentCandidates.length > 0) currentText += currentCandidates[0];
     if (currentText.trim()) {
-      if (window.chatAddIn) window.chatAddIn(currentText, { isOut: true, isPinyinKb: true, silent: true });
+      if (window.chatAddIn) {
+        try { window.chatAddIn(currentText, { isOut: true, isPinyinKb: true, silent: true }); }
+        catch (e) { console.error("拼音打字·发送失败", e); }
+      }
     }
-    currentText = ""; currentPinyin = "";
-    refreshCandidates(true); updateInputBox();
+    resetTypingState();
   }
 
 })();
