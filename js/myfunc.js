@@ -122,26 +122,31 @@
     }, 800);
   };
 
-  function processQueue() {
-    if (!isFeatureOn) return;
-    if (isTypingTask || taskQueue.length === 0) return;
-    isTypingTask = true;
-    const task = taskQueue.shift();
-    if (task.type === 'media') {
-      if (task.addRecFn) {
-        try { task.addRecFn(task.rec); } catch (e) { console.error('拼音打字·媒体消息失败', e); }
-      }
-      setTimeout(function () { isTypingTask = false; processQueue(); }, 1000);
-    } else {
-      panel.hidden = false;
-      try { startTyping(); }
-      catch (e) {
-        console.error('拼音打字·startTyping异常', e);
-        isTypingTask = false; panel.hidden = true;
-        setTimeout(processQueue, 1000);
-      }
+function processQueue() {
+  if (!isFeatureOn) return;
+  if (isTypingTask || taskQueue.length === 0) return;
+  isTypingTask = true;
+  const task = taskQueue.shift();
+  if (task.type === 'media') {
+    if (task.addRecFn) {
+      try {
+        // ★ 关键：带 pinyinBypass，否则 addRec 会再次被拼音钩子拦截，
+        //   而 isTypingTask=true 时 pinyinKbQueuePush 会静默 return，导致媒体消息永久丢失
+        const mediaRec = Object.assign({}, task.rec, { pinyinBypass: true });
+        task.addRecFn(mediaRec);
+      } catch (e) { console.error('拼音打字·媒体消息失败', e); }
+    }
+    setTimeout(function () { isTypingTask = false; processQueue(); }, 1000);
+  } else {
+    panel.hidden = false;
+    try { startTyping(); }
+    catch (e) {
+      console.error('拼音打字·startTyping异常', e);
+      isTypingTask = false; panel.hidden = true;
+      setTimeout(processQueue, 1000);
     }
   }
+}
 
   function finishTask() {
     clearTimeout(autoTimer); clearTimeout(tenMinTimer);
