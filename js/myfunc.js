@@ -239,12 +239,12 @@
         let tries = 0;
         while (currentPinyin.length > 2 && tries < 3) {
           currentPinyin = currentPinyin.slice(0, -1);
-          if (matchPool(currentPinyin).length > 0) {
-            refreshCandidates(true);
-            break;
-          }
+          if (matchPool(currentPinyin).length > 0) break;
           tries++;
         }
+        // 关键：无论匹配成功与否都刷新 pyBar，避免循环 3 次都没匹配时
+        // currentPinyin 已减 3 个字符、pyBar 还停在旧值 → 下次任何刷新一次跳多个字母
+        refreshCandidates(true);
       }
       Math.random() < 0.5 ? step2() : step1();
     }, 5000);
@@ -297,20 +297,25 @@
   }
 
   // ===== 候选刷新（A1 已修：匹配失败保留旧池） =====
+  // ===== 候选刷新（严格按当前拼音：匹配失败也清空） =====
   function refreshCandidates(reset) {
     if (reset) {
-      if (pyBar) pyBar.textContent = currentPinyin;
+      if (pyBar) pyBar.textContent = currentPinyin || '';
       if (!currentPinyin) {
         candidatesPool = []; shownWords = []; currentCandidates = []; targetWord = "";
         if (candBar) candBar.innerHTML = "";
         return false;
       }
       const newPool = matchPool(currentPinyin);
-      if (newPool.length > 0) {
-        candidatesPool = newPool;
-        shownWords = [];
+      // 严格按当前拼音：匹配失败也清空候选池，
+      // 否则 pyBar 显示 "n"、候选区还停在 "ni" 那一批词，拼音条与候选区不同步。
+      candidatesPool = newPool;
+      shownWords = [];
+      if (newPool.length === 0) {
+        currentCandidates = []; targetWord = "";
+        if (candBar) candBar.innerHTML = "";
+        return false;
       }
-      // 匹配失败：保留旧池
     }
     const nextWords = [];
     for (let i = 0; i < candidatesPool.length; i++) {
@@ -350,50 +355,24 @@ function doSend() {
   if (!text && currentPinyin && currentCandidates && currentCandidates.length > 0) {
     text = currentCandidates[0].trim();
   }
-  if (!text) { resetTypingState(); if (panel) panel.hidden = true; return; }
-
-  let ok = false;
-
-  // ① 首选：走真实 UI 发送（触发 chat.js 完整链路：渲染/入库/触发回复）
-  try {
-    const input   = document.getElementById('chat-input');
-    const sendBtn = document.getElementById('chat-send');
-
-    if (input) {
-      if (input.tagName === 'DIV') {
-        input.innerText = text;                       // ✅ contenteditable 用 innerText
-      } else {
-        input.value = text;                           // textarea / input 才用 value
-      }
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-
-      if (sendBtn) {
-        sendBtn.click();
-      } else {
-        input.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-          bubbles: true, cancelable: true
-        }));
-      }
-      ok = true;
-    }
-  } catch (e) { console.error('拼音打字·UI 发送失败', e); }
-
-  // ② 兜底：全局接口
-  if (!ok) {
-    try {
-      if (typeof window.chatSendMsg === 'function') {
-        window.chatSendMsg(text);  ok = true;
-      } else if (typeof window.chatAddIn === 'function') {
-        window.chatAddIn(text, { isOut: true, isPinyinKb: true, silent: false });  ok = true;
-      }
-    } catch (e2) { console.error('拼音打字·全局发送失败', e2); }
+  if (!text) {
+    resetTypingState();
+    return;
   }
 
-  if (!ok) console.warn('拼音打字：所有发送路径均失败，检查 chat.js 是否暴露了发送接口');
+  try {
+    // 拼音打字 = 对方打字 → 一律走「对方」身份（左侧气泡）
+    // 不 fallback 到 chatSendMsg / chatAddIn / sendBtn.click —— 那几条都是「我」发的路径
+    if (typeof window.chatAddInPinyin === 'function') {
+      window.chatAddInPinyin(text);
+    } else {
+      console.error('[拼音打字] chat.js 未更新（缺 chatAddInPinyin），本条无法以「对方」身份发出');
+    }
+  } catch (e) {
+    console.error('拼音打字·发送失败', e);
+  }
 
   resetTypingState();
   if (panel) panel.hidden = true;
 }
-
 })();
