@@ -5210,7 +5210,8 @@ return !PENDING_CARD_SETTLED[rec[f]];
 }
 function addRec(rec) {
       // ====== 拟真拼音键盘接管钩子 ======
-    if (rec.side === 'in' && !rec.special && window.isPinyinKbEnabled) {
+    // pinyinBypass: true = 拼音打字自己合成的消息，跳过接管（否则死循环）
+    if (rec.side === 'in' && !rec.special && !rec.pinyinBypass && window.isPinyinKbEnabled) {
         if (window.pinyinKbQueuePush) {
             window.pinyinKbQueuePush(rec, addRec); 
             return null; 
