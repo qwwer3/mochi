@@ -179,31 +179,130 @@ function processQueue() {
   }
 
   // ===== 纯函数：按前缀匹配候选池 =====
+  // 两条路径，取并集，不自动回退：
+  //   路径 1 · 整拼音前缀匹配（原逻辑，保留）：如 "pengyouquan" 直接用 "pyq" 的 T9 展开去试
+  //   路径 2 · 首字母前缀匹配（新增）：把 "pengyouquan" 切成 peng/you/quan → 首字母 "pyq"，用 T9 展开去试
   function matchPool(prefix) {
     if (!prefix) return [];
     const dict = window.PY_DICT || {};
-    const pool = [];
+    if (Object.keys(dict).length === 0) return [];
+
+    // 展开单个字符为 T9 字符集：
+    //   数字 "7"  → 查 T9_MAP["7"] = "pqrs"
+    //   字母 "p"  → 反查 T9_MAP，找到 "pqrs"
+    //   其他     → 原样
+    function expandChar(ch) {
+      if (window.T9_MAP && window.T9_MAP[ch]) return window.T9_MAP[ch];
+      if (window.T9_MAP) {
+        for (const d in window.T9_MAP) {
+          if (window.T9_MAP[d].indexOf(ch) >= 0) return window.T9_MAP[d];
+        }
+      }
+      return ch;
+    }
+
+    // 构造 T9 正则：prefix 每一位 → [对应字母集]
     let regexStr = "^";
     for (let i = 0; i < prefix.length; i++) {
-      const ch = prefix.charAt(i);
-      regexStr += "[" + ((window.T9_MAP && window.T9_MAP[ch]) || ch) + "]";
+      regexStr += "[" + expandChar(prefix.charAt(i)) + "]";
     }
     let reg = null;
     try { reg = new RegExp(regexStr); } catch (e) { return []; }
+    const prefixLen = prefix.length;
+
+    // 拼音音节表（约 400 个，最长音节 6 位如 zhuang/shuang/chuang），首次调用时缓存
+    const SYLL = matchPool._SYLL || (matchPool._SYLL = (function () {
+      const s = 'a ai an ang ao ba bai ban bang bao bei ben beng bi bian biao bie bin bing bo bu '
+        + 'ca cai can cang cao ce cen ceng cha chai chan chang chao che chen cheng chi chong chou chu chua chuai chuan chuang chui chun chuo ci cong cou cu cuan cui cun cuo '
+        + 'da dai dan dang dao de dei deng di dian diao die ding diu dong dou du duan dui dun duo '
+        + 'e ei en eng er fa fan fang fei fen feng fo fou fu '
+        + 'ga gai gan gang gao ge gei gen geng gong gou gu gua guai guan guang gui gun guo '
+        + 'ha hai han hang hao he hei hen heng hong hou hu hua huai huan huang hui hun huo '
+        + 'ji jia jian jiang jiao jie jin jing jiong jiu ju juan jue jun '
+        + 'ka kai kan kang kao ke kei ken keng kong kou ku kua kuai kuan kuang kui kun kuo '
+        + 'la lai lan lang lao le lei leng li lia lian liang liao lie lin ling liu lo long lou lu lv luan lue lve lun luo '
+        + 'ma mai man mang mao me mei men meng mi mian miao mie min ming miu mo mou mu '
+        + 'na nai nan nang nao ne nei nen neng ni nian niang niao nie nin ning niu nong nou nu nv nuan nue nve nuo '
+        + 'o ou pa pai pan pang pao pei pen peng pi pian piao pie pin ping po pou pu '
+        + 'qi qia qian qiang qiao qie qin qing qiong qiu qu quan que qun '
+        + 'ran rang rao re ren reng ri rong rou ru ruan rui run ruo '
+        + 'sa sai san sang sao se sen seng sha shai shan shang shao she shen sheng shi shou shu shua shuai shuan shuang shui shun shuo si song sou su suan sui sun suo '
+        + 'ta tai tan tang tao te teng ti tian tiao tie ting tong tou tu tuan tui tun tuo '
+        + 'wa wai wan wang wei wen weng wo wu '
+        + 'xi xia xian xiang xiao xie xin xing xiong xiu xu xuan xue xun '
+        + 'ya yan yang yao ye yi yin ying yo yong you yu yuan yue yun '
+        + 'za zai zan zang zao ze zei zen zeng zha zhai zhan zhang zhao zhe zhen zheng zhi zhong zhou zhu zhua zhuai zhuan zhuang zhui zhun zhuo zi zong zou zu zuan zui zun zuo';
+      const set = new Set();
+      s.split(' ').forEach(function (x) { if (x) set.add(x); });
+      return set;
+    })());
+
+    // 拼音串 → 每音节首字母拼接（DP 最少音节切分，尽量选音节少的切法）
+    // 例：pengyouquan → peng/you/quan → "pyq"；nihao → ni/hao → "nh"
+    // 无法切分返回 null
+    function initialsOf(py) {
+      if (matchPool._iniCache && py in matchPool._iniCache) {
+        return matchPool._iniCache[py];
+      }
+      const n = py.length;
+      const dp = new Array(n + 1).fill(Infinity);
+      const prev = new Array(n + 1).fill(-1);
+      dp[0] = 0;
+      for (let i = 0; i < n; i++) {
+        if (dp[i] === Infinity) continue;
+        for (let len = 6; len >= 1; len--) {   // 最长音节 zhuang=6，从长到短
+          if (i + len > n) continue;
+          if (!SYLL.has(py.slice(i, i + len))) continue;
+          if (dp[i + len] > dp[i] + 1) {
+            dp[i + len] = dp[i] + 1;
+            prev[i + len] = i;
+          }
+        }
+      }
+      let out = null;
+      if (dp[n] !== Infinity) {
+        const segs = [];
+        let pos = n;
+        while (pos > 0) {
+          const p = prev[pos];
+          segs.unshift(py.slice(p, pos));
+          pos = p;
+        }
+        out = segs.map(function (x) { return x.charAt(0); }).join('');
+      }
+      if (!matchPool._iniCache) matchPool._iniCache = {};
+      matchPool._iniCache[py] = out;
+      return out;
+    }
+
+    const pool = [];
     for (const py in dict) {
       if (!Object.prototype.hasOwnProperty.call(dict, py)) continue;
-      if (reg.test(py)) {
-        const words = dict[py];
-        if (Array.isArray(words)) {
-          for (let j = 0; j < words.length; j++) {
-            if (pool.indexOf(words[j]) < 0) pool.push(words[j]);
-          }
+      if (!/^[a-z]+$/.test(py)) continue;         // 防御：跳过非纯小写字母键
+      const words = dict[py];
+      if (!Array.isArray(words) || words.length === 0) continue;
+
+      let hit = false;
+
+      // 路径 1 · 整拼音前缀匹配（原逻辑）
+      if (reg.test(py)) hit = true;
+
+      // 路径 2 · 首字母前缀匹配（新增）
+      if (!hit) {
+        const ini = initialsOf(py);
+        if (ini && ini.length >= prefixLen) {
+          if (reg.test(ini.slice(0, prefixLen))) hit = true;
+        }
+      }
+
+      if (hit) {
+        for (let j = 0; j < words.length; j++) {
+          if (pool.indexOf(words[j]) < 0) pool.push(words[j]);
         }
       }
     }
     return pool;
   }
-
   // ===== 动作一 =====
   function step1() {
     if (!isTypingTask) return;
