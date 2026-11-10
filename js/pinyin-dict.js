@@ -333,88 +333,88 @@
   window.PY_DICT = FALLBACK;
   console.log('[拼音词库] 🔧 保底已挂载：' + Object.keys(FALLBACK).length + ' 个音节');
 
-  // ========== 异步加载大词库 ==========
-  console.log('[拼音词库] 🌐 开始 fetch ./pinyin-dict-data.json ...');
+  // ========== 异步加载大词库（已停用：改用 freq-loader.js + pinyin-freq.txt） ==========
+  // 原 pinyin-dict-data.json 不再加载；PY_DICT 保留 FALLBACK（80 个音节）作为兜底数据源
+  if (false) {
+    console.log('[拼音词库] 🌐 开始 fetch ./pinyin-dict-data.json ...');
 
-  fetch('./pinyin-dict-data.json?v=' + Date.now(), { cache: 'no-store' })
-    .then(function (res) {
-      console.log('[拼音词库] 📡 fetch 响应：HTTP ' + res.status + '，ok=' + res.ok);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.json();
-    })
-    .then(function (data) {
-      console.log('[拼音词库] 📄 json 已解析，键数：' + Object.keys(data).length);
+    fetch('./pinyin-dict-data.json?v=' + Date.now(), { cache: 'no-store' })
+      .then(function (res) {
+        console.log('[拼音词库] 📡 fetch 响应：HTTP ' + res.status + '，ok=' + res.ok);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        console.log('[拼音词库] 📄 json 已解析，键数：' + Object.keys(data).length);
 
-      if (!data || typeof data !== 'object') throw new Error('词库不是对象');
-      var keys = Object.keys(data);
-      if (!keys.length) throw new Error('词库为空');
+        if (!data || typeof data !== 'object') throw new Error('词库不是对象');
+        var keys = Object.keys(data);
+        if (!keys.length) throw new Error('词库为空');
 
-      var merged = {};
-      for (var k in FALLBACK) {
-        if (Object.prototype.hasOwnProperty.call(FALLBACK, k)) merged[k] = FALLBACK[k].slice();
-      }
-
-      var cleanPy = function (s) {
-        return String(s || '').normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, '');
-      };
-
-      var stats = { ok: 0, skip: 0, fail: 0 };
-
-      keys.forEach(function (key) {
-        var val = data[key];
-        if (!val) { stats.skip++; return; }
-
-        var keyIsPinyin = /^[a-z]+$/.test(key);
-        var py, words;
-
-        if (keyIsPinyin && Array.isArray(val)) {
-          // 反转格式：key="a"，val=["啊","阿",...]
-          py = key; words = val;
-        } else if (!keyIsPinyin && typeof val === 'string') {
-          // 词→拼音字符串
-          py = cleanPy(val); words = [key];
-        } else if (!keyIsPinyin && Array.isArray(val) && val.length >= 2
-                   && typeof val[0] === 'string' && typeof val[1] === 'number') {
-          // 词→[拼音, 频次]
-          py = cleanPy(val[0]); words = [key];
-        } else if (!keyIsPinyin && val && typeof val === 'object' && !Array.isArray(val)) {
-          var pk = ['pinyin','py','value','v'].find(function (kk) {
-            return typeof val[kk] === 'string';
-          });
-          if (pk) { py = cleanPy(val[pk]); words = [key]; }
-          else { stats.skip++; return; }
-        } else {
-          stats.skip++; return;
+        var merged = {};
+        for (var k in FALLBACK) {
+          if (Object.prototype.hasOwnProperty.call(FALLBACK, k)) merged[k] = FALLBACK[k].slice();
         }
 
-        if (!py || !/^[a-z]+$/.test(py)) { stats.fail++; return; }
-        if (!merged[py]) merged[py] = [];
-        for (var i = 0; i < words.length; i++) {
-          var w = words[i];
-          if (typeof w === 'string' && w && merged[py].indexOf(w) < 0 && merged[py].length < 20) {
-            merged[py].push(w);
+        var cleanPy = function (s) {
+          return String(s || '').normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, '');
+        };
+
+        var stats = { ok: 0, skip: 0, fail: 0 };
+
+        keys.forEach(function (key) {
+          var val = data[key];
+          if (!val) { stats.skip++; return; }
+
+          var keyIsPinyin = /^[a-z]+$/.test(key);
+          var py, words;
+
+          if (keyIsPinyin && Array.isArray(val)) {
+            py = key; words = val;
+          } else if (!keyIsPinyin && typeof val === 'string') {
+            py = cleanPy(val); words = [key];
+          } else if (!keyIsPinyin && Array.isArray(val) && val.length >= 2
+                     && typeof val[0] === 'string' && typeof val[1] === 'number') {
+            py = cleanPy(val[0]); words = [key];
+          } else if (!keyIsPinyin && val && typeof val === 'object' && !Array.isArray(val)) {
+            var pk = ['pinyin','py','value','v'].find(function (kk) {
+              return typeof val[kk] === 'string';
+            });
+            if (pk) { py = cleanPy(val[pk]); words = [key]; }
+            else { stats.skip++; return; }
+          } else {
+            stats.skip++; return;
           }
-        }
-        stats.ok++;
-      });
 
-      window.PY_DICT = merged;
-      var pyCount = Object.keys(merged).length;
-      var wordCount = 0;
-      for (var k2 in merged) wordCount += merged[k2].length;
+          if (!py || !/^[a-z]+$/.test(py)) { stats.fail++; return; }
+          if (!merged[py]) merged[py] = [];
+          for (var i = 0; i < words.length; i++) {
+            var w = words[i];
+            if (typeof w === 'string' && w && merged[py].indexOf(w) < 0 && merged[py].length < 20) {
+              merged[py].push(w);
+            }
+          }
+          stats.ok++;
+        });
 
-      console.log('[拼音词库] ✅ 合并完成');
-      console.log('   成功处理：' + stats.ok + ' 条');
-      console.log('   跳过：' + stats.skip + ' 条');
-      console.log('   拼音非法：' + stats.fail + ' 条');
-      console.log('   👉 最终：' + pyCount + ' 个音节，' + wordCount + ' 个字词');
-      console.log('   关键键验证：');
-      ['a', 'ni', 'jintian', 'changcheng', 'gongzuo', 'nihao', 'xiangni'].forEach(function (kk) {
-        console.log('      ' + kk + ':', merged[kk] ? merged[kk].slice(0, 3) : '(缺)');
+        window.PY_DICT = merged;
+        var pyCount = Object.keys(merged).length;
+        var wordCount = 0;
+        for (var k2 in merged) wordCount += merged[k2].length;
+
+        console.log('[拼音词库] ✅ 合并完成');
+        console.log('   成功处理：' + stats.ok + ' 条');
+        console.log('   跳过：' + stats.skip + ' 条');
+        console.log('   拼音非法：' + stats.fail + ' 条');
+        console.log('   👉 最终：' + pyCount + ' 个音节，' + wordCount + ' 个字词');
+        console.log('   关键键验证：');
+        ['a', 'ni', 'jintian', 'changcheng', 'gongzuo', 'nihao', 'xiangni'].forEach(function (kk) {
+          console.log('      ' + kk + ':', merged[kk] ? merged[kk].slice(0, 3) : '(缺)');
+        });
+      })
+      .catch(function (err) {
+        console.error('[拼音词库] ❌ 加载失败：', err.message || err);
       });
-    })
-    .catch(function (err) {
-      console.error('[拼音词库] ❌ 加载失败：', err.message || err);
-    });
+  }
 })();
