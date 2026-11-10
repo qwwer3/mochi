@@ -384,7 +384,7 @@ function processQueue() {
         refreshCandidates(true);
       }
       Math.random() < 0.5 ? step2() : step1();
-    }, 8000);
+    }, 10000);
   }
 
   // ===== 动作二 =====
@@ -393,7 +393,7 @@ function processQueue() {
     clearTimeout(autoTimer);
     autoTimer = setTimeout(function () {
       Math.random() < 0.7 ? step4() : step3();
-    }, 6000);
+    }, 8000);
   }
 
   // ===== 动作三 =====
@@ -403,7 +403,7 @@ function processQueue() {
     autoTimer = setTimeout(function () {
       if (Math.random() < 0.7) step4();
       else { slideRight() ? step3() : step4(); }
-    }, 5000);
+    }, 7000);
   }
 
   // ===== 动作四 =====
