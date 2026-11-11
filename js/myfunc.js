@@ -178,10 +178,6 @@ function processQueue() {
     }
   }
 
-  // ===== 纯函数：按前缀匹配候选池 =====
-  // 两条路径，取并集，不自动回退：
-  //   路径 1 · 整拼音前缀匹配（原逻辑，保留）：如 "pengyouquan" 直接用 "pyq" 的 T9 展开去试
-  //   路径 2 · 首字母前缀匹配（新增）：把 "pengyouquan" 切成 peng/you/quan → 首字母 "pyq"，用 T9 展开去试
   function matchPool(prefix) {
     if (!prefix) return [];
 
@@ -274,58 +270,85 @@ function processQueue() {
       return out;
     }
 
-    var hits = [];
+    // 收集所有命中，分「单字组」和「词组组」
+    var singles = [];
+    var multiples = [];
     var seen = new Set();
 
-    if (useFreq) {
-      for (var py3 in dict) {
-        if (!Object.prototype.hasOwnProperty.call(dict, py3)) continue;
-        if (!/^[a-z]+$/.test(py3)) continue;
-        var arr = dict[py3];
-        if (!arr || arr.length === 0) continue;
+    for (var py3 in dict) {
+      if (!Object.prototype.hasOwnProperty.call(dict, py3)) continue;
+      if (!/^[a-z]+$/.test(py3)) continue;
+      var arr = dict[py3];
+      if (!arr || arr.length === 0) continue;
 
-        var hit = reg.test(py3);
-        if (!hit) {
-          var ini = initialsOf(py3);
-          if (ini && ini.length >= prefixLen && reg.test(ini.slice(0, prefixLen))) hit = true;
-        }
-        if (!hit) continue;
-
-        for (var j = 0; j < arr.length; j++) {
-          var it = arr[j];
-          if (!it || !it.w) continue;
-          if (seen.has(it.w)) continue;
-          seen.add(it.w);
-          hits.push({ w: it.w, f: it.f || 0 });
-        }
+      var hit = reg.test(py3);
+      if (!hit) {
+        var ini = initialsOf(py3);
+        if (ini && ini.length >= prefixLen && reg.test(ini.slice(0, prefixLen))) hit = true;
       }
-    } else {
-      for (var py4 in dict) {
-        if (!Object.prototype.hasOwnProperty.call(dict, py4)) continue;
-        if (!/^[a-z]+$/.test(py4)) continue;
-        var words = dict[py4];
-        if (!Array.isArray(words) || words.length === 0) continue;
+      if (!hit) continue;
 
-        var hit2 = reg.test(py4);
-        if (!hit2) {
-          var ini2 = initialsOf(py4);
-          if (ini2 && ini2.length >= prefixLen && reg.test(ini2.slice(0, prefixLen))) hit2 = true;
+      for (var j = 0; j < arr.length; j++) {
+        var item = arr[j];
+        var w, f;
+        if (typeof item === 'string') {
+          w = item;
+          f = Math.max(0, 10000 - j * 10);   // 兜底模式：用数组位置倒推分数
+        } else if (item && typeof item === 'object' && item.w) {
+          w = item.w;
+          f = item.f || 0;
+        } else {
+          continue;
         }
-        if (!hit2) continue;
-
-        for (var k = 0; k < words.length; k++) {
-          var w = words[k];
-          if (typeof w !== 'string' || !w) continue;
-          if (seen.has(w)) continue;
-          seen.add(w);
-          hits.push({ w: w, f: Math.max(0, 10000 - k * 10) });
+        if (!w) continue;
+        if (seen.has(w)) continue;
+        seen.add(w);
+        if (w.length === 1) {
+          singles.push({ w: w, f: f });
+        } else {
+          multiples.push({ w: w, f: f });
         }
       }
     }
 
-    hits.sort(function (a, b) { return b.f - a.f; });
+    singles.sort(function (a, b) { return b.f - a.f; });
+    multiples.sort(function (a, b) { return b.f - a.f; });
 
-    var pool = hits.slice(0, 50).map(function (h) { return h.w; });
+    var result = [];
+
+    if (!useFreq) {
+      // 兜底路径（freq 加载失败时）：混排所有命中，保持原行为
+      result = singles.concat(multiples);
+      result.sort(function (a, b) { return b.f - a.f; });
+    } else if (singles.length === 0) {
+      // 规则 2B：没匹配到任何单字 → 全部词组按频率降序
+      result = multiples;
+    } else if (singles.length >= 6) {
+      // 规则 2A：单字 ≥ 6 → 单字 + 高频词组（f > 50000），混排
+      var high = [];
+      for (var h = 0; h < multiples.length; h++) {
+        if (multiples[h].f > 50000) high.push(multiples[h]);
+      }
+      result = singles.concat(high);
+      result.sort(function (a, b) { return b.f - a.f; });
+    } else {
+      // 规则 3：0 < 单字 < 6 → 单字 + 高频词组，不够 6 个时用低频词组补
+      var high2 = [];
+      var low2 = [];
+      for (var h2 = 0; h2 < multiples.length; h2++) {
+        if (multiples[h2].f > 50000) high2.push(multiples[h2]);
+        else low2.push(multiples[h2]);
+      }
+      var merged = singles.concat(high2);
+      if (merged.length < 6 && low2.length > 0) {
+        var need = 6 - merged.length;
+        merged = merged.concat(low2.slice(0, need));
+      }
+      merged.sort(function (a, b) { return b.f - a.f; });
+      result = merged;
+    }
+
+    var pool = result.slice(0, 50).map(function (x) { return x.w; });
 
     var cacheSize = 0;
     for (var ck in matchPool._cache) {
