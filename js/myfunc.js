@@ -322,7 +322,7 @@ function processQueue() {
       result.sort(function (a, b) { return b.f - a.f; });
     } else if (singles.length === 0) {
       // 规则 2B：没匹配到任何单字 → 全部词组按频率降序
-      result = multiples;
+      result = multiples.slice();
     } else if (singles.length >= 6) {
       // 规则 2A：单字 ≥ 6 → 单字 + 高频词组（f > 50000），混排
       var high = [];
