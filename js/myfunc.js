@@ -327,7 +327,7 @@ function processQueue() {
       // 规则 2A：单字 ≥ 6 → 单字 + 高频词组（f > 50000），混排
       var high = [];
       for (var h = 0; h < multiples.length; h++) {
-        if (multiples[h].f > 50000) high.push(multiples[h]);
+        if (multiples[h].f > 300000) high.push(multiples[h]);
       }
       result = singles.concat(high);
       result.sort(function (a, b) { return b.f - a.f; });
